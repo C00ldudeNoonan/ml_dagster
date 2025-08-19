@@ -5,26 +5,21 @@ version = "0.1.0"
 dependencies = [
     "boto3>=1.40.5",
     "dagster-dg-cli>=1.11.5",
-    "dagster-mlflow>=0.27.5",
     "dagster-webserver>=1.11.5",
     "dagster==1.11.5",
-    "joblib>=1.5.1",
     "matplotlib>=3.9.4",
-    "mlflow>=3.1.4",
     "numpy>=2.0.2",
-    "pandas>=2.3.1",
-    "pytest>=8.4.1",
-    "ruff>=0.12.9",
     "scikit-learn>=1.6.1",
     "seaborn>=0.13.2",
     "torch>=2.8.0",
-    "torchvision>=0.23.0",
 ]
 
 [dependency-groups]
 dev = [
     "dagster-webserver",
     "dagster-dg-cli",
+    "pytest>=8.4.1",
+    "ruff>=0.12.9",
 ]
 
 [build-system]

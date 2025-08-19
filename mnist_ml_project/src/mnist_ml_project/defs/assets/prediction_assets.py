@@ -3,12 +3,8 @@ from torch.utils.data import DataLoader, TensorDataset
 import dagster as dg
 from typing import List, Dict, Optional, Any
 import numpy as np
-from mnist_ml_project.defs.assets.model_assets import DigitCNN
-from mnist_ml_project.defs.assets.model_assets import (
-    load_saved_model,
-    list_saved_models,
-)
-import pickle
+import os
+from mnist_ml_project.defs.types import BatchPredictionConfig, RealTimePredictionConfig
 
 
 class BatchPredictionConfig(dg.Config):
@@ -48,17 +44,23 @@ def batch_digit_predictions(
 
     try:
         # List saved models and get the latest one
-        saved_models = list_saved_models(model_store.models_path)
+        saved_models = model_store.list_models()
         if not saved_models:
             context.log.error("No saved models found")
             return {"predictions": [], "confidences": []}
 
-        latest_model_path = saved_models[0]  # First one is newest due to sorting
-        context.log.info(f"Loading production model from {latest_model_path}")
+        # Get the latest model name (first one is newest due to sorting)
+        latest_model_name = saved_models[0]  # Already just the model name
+        context.log.info(f"Loading production model: {latest_model_name}")
 
-        # Load the model directly since it's the full model object
-        with open(latest_model_path, "rb") as f:
-            production_model = pickle.load(f)
+        # Load the model using the resource
+        model_data = model_store.load_model(latest_model_name)
+        
+        # Handle both formats: dict with 'model' key or direct model object
+        if isinstance(model_data, dict) and 'model' in model_data:
+            production_model = model_data['model']
+        else:
+            production_model = model_data  # Direct model object
 
         context.log.info("Model loaded successfully")
         context.log.info(f"Model architecture:\n{str(production_model)}")
@@ -110,7 +112,7 @@ def batch_digit_predictions(
                 1 for c in confidences if c < config.confidence_threshold
             ),
             "confidence_threshold": config.confidence_threshold,
-            "model_path": latest_model_path,
+            "model_path": latest_model_name,
         },
         output_name="result",
     )
@@ -137,23 +139,29 @@ def digit_predictions(
 
     try:
         # List saved models and get the latest one
-        saved_models = list_saved_models(model_store.models_path)
+        saved_models = model_store.list_models()
         if not saved_models:
             context.log.error("No saved models found")
-            return {"error": "No model available"}
+            return {"prediction": None, "confidence": 0.0, "error": "No models available"}
 
-        latest_model_path = saved_models[0]  # First one is newest due to sorting
-        context.log.info(f"Loading production model from {latest_model_path}")
+        # Get the latest model name (first one is newest due to sorting)
+        latest_model_name = saved_models[0]  # Already just the model name
+        context.log.info(f"Loading production model: {latest_model_name}")
 
-        # Load the model directly since it's the full model object
-        with open(latest_model_path, "rb") as f:
-            production_model = pickle.load(f)
+        # Load the model using the resource
+        model_data = model_store.load_model(latest_model_name)
+        
+        # Handle both formats: dict with 'model' key or direct model object
+        if isinstance(model_data, dict) and 'model' in model_data:
+            production_model = model_data['model']
+        else:
+            production_model = model_data  # Direct model object
 
         context.log.info("Model loaded successfully")
 
     except Exception as e:
         context.log.error(f"Failed to load production model: {str(e)}")
-        return {"error": f"Failed to load model: {str(e)}"}
+        return {"prediction": None, "confidence": 0.0, "error": str(e)}
 
     # For demo purposes, create some test images
     input_images = torch.randn(config.batch_size, 1, 28, 28)
@@ -195,7 +203,7 @@ def digit_predictions(
                 1 for c in confidences if c >= config.confidence_threshold
             ),
             "confidence_threshold": config.confidence_threshold,
-            "model_path": latest_model_path,
+            "model_path": latest_model_name,
         },
         output_name="result",
     )

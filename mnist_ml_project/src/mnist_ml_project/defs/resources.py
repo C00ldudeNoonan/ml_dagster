@@ -1,7 +1,11 @@
 import dagster as dg
 import torch
+import os
+import pickle
+import boto3
+import io
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
 class ModelStoreResource(dg.ConfigurableResource, ABC):
@@ -15,6 +19,11 @@ class ModelStoreResource(dg.ConfigurableResource, ABC):
     def load_model(self, model_name: str) -> Dict[str, Any]:
         pass
 
+    @abstractmethod
+    def list_models(self) -> List[str]:
+        """List available models, sorted by modification time (newest first)."""
+        pass
+
 
 class LocalModelStoreResource(ModelStoreResource):
     """Local file system model storage."""
@@ -23,9 +32,6 @@ class LocalModelStoreResource(ModelStoreResource):
 
     def save_model(self, model_data: Dict[str, Any], model_name: str):
         """Save model data to local filesystem."""
-        import os
-        import pickle
-
         os.makedirs(self.models_path, exist_ok=True)
         model_path = os.path.join(self.models_path, f"{model_name}.pkl")
 
@@ -34,11 +40,21 @@ class LocalModelStoreResource(ModelStoreResource):
 
     def load_model(self, model_name: str) -> Dict[str, Any]:
         """Load model data from local filesystem."""
-        import pickle
-
         model_path = os.path.join(self.models_path, f"{model_name}.pkl")
         with open(model_path, "rb") as f:
             return pickle.load(f)
+
+    def list_models(self) -> List[str]:
+        """List available models, sorted by modification time (newest first)."""
+        if not os.path.exists(self.models_path):
+            return []
+        
+        model_files = [f for f in os.listdir(self.models_path) if f.endswith('.pkl')]
+        # Sort by modification time, newest first
+        model_files.sort(key=lambda x: os.path.getmtime(os.path.join(self.models_path, x)), reverse=True)
+        
+        # Return just the model names without extension
+        return [os.path.splitext(f)[0] for f in model_files]
 
 
 class S3ModelStoreResource(ModelStoreResource):
@@ -48,11 +64,6 @@ class S3ModelStoreResource(ModelStoreResource):
     models_prefix: str = "models/"
 
     def save_model(self, model, model_name: str):
-        import boto3
-        import torch
-        import io
-        import os
-
         # Create a buffer to store the model
         buffer = io.BytesIO()
         torch.save(model.state_dict(), buffer)
@@ -66,11 +77,6 @@ class S3ModelStoreResource(ModelStoreResource):
         s3_client.upload_fileobj(buffer, self.bucket_name, s3_key)
 
     def load_model(self, model_name: str):
-        import boto3
-        import torch
-        import io
-        import os
-
         # Create a buffer to receive the model data
         buffer = io.BytesIO()
 
@@ -84,6 +90,40 @@ class S3ModelStoreResource(ModelStoreResource):
         # Reset buffer position and load the model
         buffer.seek(0)
         return torch.load(buffer)
+
+    def list_models(self) -> List[str]:
+        """List available models from S3, sorted by modification time (newest first)."""
+        s3_client = boto3.client("s3")
+        
+        try:
+            # List objects with the models prefix
+            response = s3_client.list_objects_v2(
+                Bucket=self.bucket_name,
+                Prefix=self.models_prefix
+            )
+            
+            if 'Contents' not in response:
+                return []
+            
+            # Get model files and their last modified times
+            model_objects = []
+            for obj in response['Contents']:
+                if obj['Key'].endswith('.pth'):
+                    model_objects.append({
+                        'key': obj['Key'],
+                        'last_modified': obj['LastModified']
+                    })
+            
+            # Sort by modification time, newest first
+            model_objects.sort(key=lambda x: x['last_modified'], reverse=True)
+            
+            # Return just the model names without extension and prefix
+            return [os.path.splitext(os.path.basename(obj['key']))[0] for obj in model_objects]
+            
+        except Exception as e:
+            # Log error and return empty list
+            print(f"Error listing S3 models: {e}")
+            return []
 
 
 class ComputeResource(dg.ConfigurableResource):
@@ -110,8 +150,6 @@ class ComputeResource(dg.ConfigurableResource):
     def get_training_config(self):
         """Get compute configuration for model training."""
         if self.compute_env == "local":
-            import torch
-
             # Validate and set device
             if self.device == "cuda" and not torch.cuda.is_available():
                 self.device = "cpu"
@@ -125,8 +163,6 @@ class ComputeResource(dg.ConfigurableResource):
             }
 
         elif self.compute_env == "sagemaker":
-            import boto3
-
             # Get SageMaker client
             sagemaker_client = boto3.client("sagemaker", region_name=self.region)
 

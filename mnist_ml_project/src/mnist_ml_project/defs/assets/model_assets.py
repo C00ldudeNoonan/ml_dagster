@@ -27,43 +27,6 @@ from mnist_ml_project.defs.types import ModelData, EvaluationResult
 from mnist_ml_project.defs.utils import get_optimizer, create_conv_block
 
 
-def load_saved_model(model_path: str) -> Dict[str, Any]:
-    """
-    Load a saved model from pickle file.
-
-    Args:
-        model_path: Path to the saved model pickle file
-
-    Returns:
-        Dictionary containing model, config, and metadata
-    """
-    with open(model_path, "rb") as f:
-        model_data = pickle.load(f)
-
-    return model_data
-
-
-def list_saved_models(model_dir: str = "models") -> list:
-    """
-    List all saved model files in the models directory.
-
-    Args:
-        model_dir: Directory containing saved models
-
-    Returns:
-        List of model file paths sorted by modification time (newest first)
-    """
-    model_dir = Path(model_dir)
-    if not model_dir.exists():
-        return []
-
-    model_files = list(model_dir.glob("*.pkl"))
-    # Sort by modification time, newest first
-    model_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-
-    return [str(f) for f in model_files]
-
-
 class ModelConfig(dg.Config):
     """Configuration for model architecture and training."""
 
@@ -164,35 +127,51 @@ class DigitCNN(nn.Module):
         )  # Additional FC layer
         self.fc3 = nn.Linear(config.hidden_size // 2, 10)
 
+    def _conv_block(self, x, conv, bn, pool, dropout=None):
+        """Apply a convolutional block: conv -> bn -> relu -> pool -> dropout (optional)."""
+        x = conv(x)
+        x = bn(x)
+        x = F.relu(x)
+        x = pool(x)
+        if dropout is not None:
+            x = dropout(x)
+        return x
+
+    def _fc_block(self, x, fc, dropout=None):
+        """Apply a fully connected block: linear -> relu -> dropout (optional)."""
+        x = fc(x)
+        x = F.relu(x)
+        if dropout is not None:
+            x = dropout(x)
+        return x
+
     def forward(self, x):
-        # First conv block
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = self.pool1(x)
-
-        # Second conv block
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = self.pool2(x)
-        x = self.dropout1(x)  # Spatial dropout
-
-        # Third conv block
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = F.relu(x)
-        x = self.pool3(x)
-
-        # Flatten and fully connected layers
-        x = torch.flatten(x, 1)
-        x = self.fc1(x)
-        x = F.relu(x)
-        x = self.dropout2(x)  # Regular dropout
-        x = self.fc2(x)
-        x = F.relu(x)
-        x = self.fc3(x)
-
+        """
+        Forward pass through the CNN architecture.
+        
+        Input: (batch_size, 1, 28, 28) - MNIST digit images
+        Output: (batch_size, 10) - Raw logits for 10 digit classes
+        
+        Architecture flow:
+        1. Conv1: 28x28 -> 14x14 (5x5 kernel, 32 channels)
+        2. Conv2: 14x14 -> 7x7 (5x5 kernel, 64 channels) + spatial dropout
+        3. Conv3: 7x7 -> 3x3 (3x3 kernel, 128 channels, adaptive pooling)
+        4. Flatten: 3x3*128 = 1152 features
+        5. FC layers: 1152 -> 256 -> 128 -> 10 (with dropout)
+        """
+        # Convolutional layers with progressive downsampling
+        x = self._conv_block(x, self.conv1, self.bn1, self.pool1)
+        x = self._conv_block(x, self.conv2, self.bn2, self.pool2, self.dropout1)
+        x = self._conv_block(x, self.conv3, self.bn3, self.pool3)
+        
+        # Flatten spatial dimensions for fully connected layers
+        x = torch.flatten(x, 1)  # Keep batch dimension
+        
+        # Fully connected layers with progressive feature reduction
+        x = self._fc_block(x, self.fc1, self.dropout2)
+        x = self._fc_block(x, self.fc2)
+        x = self.fc3(x)  # Final layer - no activation (raw logits)
+        
         return x  # Return raw logits for CrossEntropyLoss
 
 
@@ -440,12 +419,11 @@ def model_evaluation(
 ) -> Dict[str, Any]:
     """Evaluate the trained model on the test set."""
 
-    # Get the model store resource
     model_store = context.resources.model_storage
 
     # Get the latest trained model
     try:
-        saved_models = list_saved_models(model_store.models_path)
+        saved_models = model_store.list_models()
         if not saved_models:
             context.log.error("No saved models found for evaluation")
             return {
@@ -455,12 +433,16 @@ def model_evaluation(
                 "classification_report": {},
             }
 
-        latest_model_path = saved_models[0]  # First one is newest due to sorting
-        context.log.info(f"Loading model for evaluation from {latest_model_path}")
+        # Get the latest model name (first one is newest due to sorting)
+        latest_model_name = saved_models[0]  # Already just the model name
+        context.log.info(f"Loading model for evaluation: {latest_model_name}")
 
-        # Load the model directly since it's the full model object
-        with open(latest_model_path, "rb") as f:
-            model_to_evaluate = pickle.load(f)
+        model_data = model_store.load_model(latest_model_name)
+        
+        if isinstance(model_data, dict) and 'model' in model_data:
+            model_to_evaluate = model_data['model']
+        else:
+            model_to_evaluate = model_data  # Direct model object
 
         # Log model metadata
         context.log.info(f"Model loaded successfully")
@@ -525,7 +507,7 @@ def model_evaluation(
             "precision_macro": float(class_report["macro avg"]["precision"]),
             "recall_macro": float(class_report["macro avg"]["recall"]),
             "f1_macro": float(class_report["macro avg"]["f1-score"]),
-            "evaluated_model_path": latest_model_path,
+            "evaluated_model_path": latest_model_name,
         },
         output_name="result",
     )
@@ -538,7 +520,7 @@ def model_evaluation(
         "predictions": all_predictions.tolist(),
         "labels": all_labels.tolist(),
         "classification_report": class_report,
-        "model_info": {"path": latest_model_path},
+        "model_info": {"path": latest_model_name},
     }
 
 
@@ -547,10 +529,12 @@ class DeploymentConfig(dg.Config):
 
     accuracy_threshold: float = ACCURACY_THRESHOLD
     model_path: str = str(MODELS_DIR)
+    custom_model_name: Optional[str] = None  # Allow users to specify a specific model to deploy
+    force_deploy: bool = False  # Allow users to bypass accuracy threshold
 
 
 @dg.asset(
-    description="Deploy model to production if it meets quality threshold",
+    description="Deploy model to production if it meets quality threshold or if custom model specified",
     group_name="model_pipeline",
     required_resource_keys={"model_storage"},
 )
@@ -560,19 +544,88 @@ def production_digit_classifier(
     model_evaluation: Dict[str, Any],
     config: DeploymentConfig,
 ) -> Optional[DigitCNN]:
-    """Deploy model to production only if it meets quality threshold."""
+    """Deploy model to production based on configuration options."""
 
+    # Get the model store resource
+    model_store = context.resources.model_storage
+    
+    # Check if user wants to deploy a specific custom model
+    if config.custom_model_name:
+        context.log.info(f"User requested deployment of custom model: {config.custom_model_name}")
+        
+        try:
+            # Load the custom model
+            custom_model_data = model_store.load_model(config.custom_model_name)
+            
+            # Handle both formats: dict with 'model' key or direct model object
+            if isinstance(custom_model_data, dict) and 'model' in custom_model_data:
+                custom_model = custom_model_data['model']
+            else:
+                custom_model = custom_model_data  # Direct model object
+            
+            # Save the custom model as production model
+            production_model_name = f"production_custom_{config.custom_model_name}"
+            context.log.info(f"Saving custom model as production model: {production_model_name}")
+            model_store.save_model(custom_model, production_model_name)
+            
+            context.add_output_metadata(
+                {
+                    "deployment_status": "deployed_custom",
+                    "custom_model_name": config.custom_model_name,
+                    "production_model_name": production_model_name,
+                    "deployment_type": "user_override",
+                },
+                output_name="result",
+            )
+            
+            return custom_model
+            
+        except Exception as e:
+            context.log.error(f"Failed to load custom model {config.custom_model_name}: {str(e)}")
+            context.add_output_metadata(
+                {
+                    "deployment_status": "failed_custom",
+                    "custom_model_name": config.custom_model_name,
+                    "error": str(e),
+                    "deployment_type": "user_override",
+                },
+                output_name="result",
+            )
+            return None
+    
+    # Standard deployment logic based on accuracy threshold
     test_accuracy = model_evaluation["test_accuracy"]
-
+    
+    # Check if user wants to force deployment regardless of accuracy
+    if config.force_deploy:
+        context.log.info(f"Force deployment enabled - deploying model with accuracy: {test_accuracy:.4f}")
+        accuracy_str = f"{test_accuracy:.2f}".replace(".", "p")
+        model_name = f"production_model_forced_{accuracy_str}"
+        
+        # Save the model using the model store
+        context.log.info(f"Saving forced production model as {model_name}")
+        model_store.save_model(digit_classifier, model_name)
+        
+        context.add_output_metadata(
+            {
+                "deployment_status": "deployed_forced",
+                "deployed_accuracy": test_accuracy,
+                "deployment_threshold": config.accuracy_threshold,
+                "model_name": model_name,
+                "deployment_type": "force_override",
+            },
+            output_name="result",
+        )
+        
+        return digit_classifier
+    
+    # Standard accuracy-based deployment
     context.log.info(
         f"Candidate model accuracy: {test_accuracy:.4f}, Threshold: {config.accuracy_threshold}"
     )
 
     if test_accuracy >= config.accuracy_threshold:
         context.log.info("Model meets quality threshold - deploying to production")
-
-        # Get the model store resource
-        model_store = context.resources.model_storage
 
         # Create model name with accuracy
         accuracy_str = f"{test_accuracy:.2f}".replace(".", "p")
@@ -588,6 +641,7 @@ def production_digit_classifier(
                 "deployed_accuracy": test_accuracy,
                 "deployment_threshold": config.accuracy_threshold,
                 "model_name": model_name,
+                "deployment_type": "standard",
             },
             output_name="result",
         )
@@ -602,6 +656,7 @@ def production_digit_classifier(
                 "deployment_status": "skipped",
                 "candidate_accuracy": test_accuracy,
                 "deployment_threshold": config.accuracy_threshold,
+                "deployment_type": "standard",
             },
             output_name="result",
         )
