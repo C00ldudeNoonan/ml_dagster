@@ -1,0 +1,218 @@
+import torch
+from torch.utils.data import DataLoader, TensorDataset
+import dagster as dg
+from typing import List, Dict, Optional, Any
+import numpy as np
+from mnist_ml_project.defs.assets.model_assets import DigitCNN
+from mnist_ml_project.defs.assets.model_assets import (
+    load_saved_model,
+    list_saved_models,
+)
+import pickle
+
+
+class BatchPredictionConfig(dg.Config):
+    """Configuration for batch prediction processing."""
+
+    batch_size: int = 64
+    num_test_images: int = 100  # Number of dummy images for demo
+    confidence_threshold: float = 0.8  # Threshold for low confidence warning
+    device: str = "cuda"  # Will fallback to CPU if CUDA not available
+
+
+class RealTimePredictionConfig(dg.Config):
+    """Configuration for real-time prediction processing."""
+
+    batch_size: int = 10  # Default number of images to process at once
+    device: str = "cuda"  # Will fallback to CPU if CUDA not available
+    confidence_threshold: float = 0.9  # Higher threshold for real-time predictions
+    return_probabilities: bool = (
+        False  # Whether to return full probability distribution
+    )
+
+
+@dg.asset(
+    description="Generate predictions on uploaded digit images",
+    compute_kind="batch_inference",
+    group_name="inference",
+    required_resource_keys={"model_storage"},
+    deps=["production_digit_classifier"],
+)
+def batch_digit_predictions(
+    context,
+    config: BatchPredictionConfig,
+) -> Dict[str, List]:
+    """Process overnight batch of user-uploaded digit images."""
+
+    # Get the model store resource
+    model_store = context.resources.model_storage
+
+    try:
+        # List saved models and get the latest one
+        saved_models = list_saved_models(model_store.models_path)
+        if not saved_models:
+            context.log.error("No saved models found")
+            return {"predictions": [], "confidences": []}
+
+        latest_model_path = saved_models[0]  # First one is newest due to sorting
+        context.log.info(f"Loading production model from {latest_model_path}")
+
+        # Load the model directly since it's the full model object
+        with open(latest_model_path, "rb") as f:
+            production_model = pickle.load(f)
+
+        context.log.info("Model loaded successfully")
+        context.log.info(f"Model architecture:\n{str(production_model)}")
+
+    except Exception as e:
+        context.log.error(f"Failed to load production model: {str(e)}")
+        context.log.error(f"Exception details: {str(e.__class__.__name__)}")
+        import traceback
+
+        context.log.error(f"Traceback: {traceback.format_exc()}")
+        return {"predictions": [], "confidences": []}
+
+    # For demo purposes, create some dummy test images
+    dummy_images = torch.randn(config.num_test_images, 1, 28, 28)
+
+    device = torch.device(
+        config.device
+        if torch.cuda.is_available() and config.device == "cuda"
+        else "cpu"
+    )
+    production_model.to(device)
+    production_model.eval()
+
+    # Preprocess images
+    processed_images = dummy_images.float() / 255.0
+
+    dataset = TensorDataset(processed_images)
+    dataloader = DataLoader(dataset, batch_size=config.batch_size, shuffle=False)
+
+    predictions = []
+    confidences = []
+
+    with torch.no_grad():
+        for (data,) in dataloader:
+            data = data.to(device)
+            outputs = production_model(data)
+            probabilities = torch.softmax(outputs, dim=1)
+            predicted_classes = torch.argmax(probabilities, dim=1)
+            max_confidences = torch.max(probabilities, dim=1)[0]
+
+            predictions.extend(predicted_classes.cpu().numpy().tolist())
+            confidences.extend(max_confidences.cpu().numpy().tolist())
+
+    context.add_output_metadata(
+        {
+            "total_predictions": len(predictions),
+            "avg_confidence": float(np.mean(confidences)),
+            "low_confidence_count": sum(
+                1 for c in confidences if c < config.confidence_threshold
+            ),
+            "confidence_threshold": config.confidence_threshold,
+            "model_path": latest_model_path,
+        },
+        output_name="result",
+    )
+
+    context.log.info(f"Generated {len(predictions)} batch predictions")
+
+    return {"predictions": predictions, "confidences": confidences}
+
+
+@dg.asset(
+    description="Real-time digit prediction endpoint",
+    compute_kind="real_time_inference",
+    group_name="inference",
+    required_resource_keys={"model_storage"},
+    deps=["production_digit_classifier"],
+)
+def digit_predictions(
+    context,
+    config: RealTimePredictionConfig,
+) -> Dict[str, Any]:
+    """Classify new handwritten digits in real-time."""
+
+    # Get the model store resource
+    model_store = context.resources.model_storage
+
+    try:
+        # List saved models and get the latest one
+        saved_models = list_saved_models(model_store.models_path)
+        if not saved_models:
+            context.log.error("No saved models found")
+            return {"error": "No model available"}
+
+        latest_model_path = saved_models[0]  # First one is newest due to sorting
+        context.log.info(f"Loading production model from {latest_model_path}")
+
+        # Load the model directly since it's the full model object
+        with open(latest_model_path, "rb") as f:
+            production_model = pickle.load(f)
+
+        context.log.info("Model loaded successfully")
+
+    except Exception as e:
+        context.log.error(f"Failed to load production model: {str(e)}")
+        return {"error": f"Failed to load model: {str(e)}"}
+
+    # For demo purposes, create some test images
+    input_images = torch.randn(config.batch_size, 1, 28, 28)
+
+    device = torch.device(
+        config.device
+        if torch.cuda.is_available() and config.device == "cuda"
+        else "cpu"
+    )
+    production_model.to(device)
+    production_model.eval()
+
+    # Preprocess input images
+    processed_images = input_images.float() / 255.0
+
+    predictions = []
+    confidences = []
+    all_probabilities = []
+
+    with torch.no_grad():
+        processed_images = processed_images.to(device)
+        outputs = production_model(processed_images)
+        probabilities = torch.softmax(outputs, dim=1)
+        predicted_classes = torch.argmax(probabilities, dim=1)
+        max_confidences = torch.max(probabilities, dim=1)[0]
+
+        predictions = predicted_classes.cpu().numpy().tolist()
+        confidences = max_confidences.cpu().numpy().tolist()
+
+        if config.return_probabilities:
+            all_probabilities = probabilities.cpu().numpy().tolist()
+
+    avg_confidence = float(np.mean(confidences))
+    context.add_output_metadata(
+        {
+            "prediction_count": len(predictions),
+            "avg_confidence": avg_confidence,
+            "high_confidence_predictions": sum(
+                1 for c in confidences if c >= config.confidence_threshold
+            ),
+            "confidence_threshold": config.confidence_threshold,
+            "model_path": latest_model_path,
+        },
+        output_name="result",
+    )
+
+    result = {
+        "predictions": predictions,
+        "confidences": confidences,
+    }
+
+    if config.return_probabilities:
+        result["probabilities"] = all_probabilities
+
+    if avg_confidence < config.confidence_threshold:
+        context.log.warning(
+            f"Average confidence {avg_confidence:.2f} below threshold {config.confidence_threshold}"
+        )
+
+    return result
