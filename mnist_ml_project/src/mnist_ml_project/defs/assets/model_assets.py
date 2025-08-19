@@ -12,6 +12,19 @@ import seaborn as sns
 import pickle
 import os
 from pathlib import Path
+from mnist_ml_project.defs.constants import (
+    EARLY_STOPPING_PATIENCE,
+    MIN_DELTA,
+    LR_STEP_SIZE,
+    LR_GAMMA,
+    MODELS_DIR,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_EPOCHS,
+    ACCURACY_THRESHOLD
+)
+from mnist_ml_project.defs.types import ModelData, EvaluationResult
+from mnist_ml_project.defs.utils import get_optimizer, create_conv_block
 
 
 def load_saved_model(model_path: str) -> Dict[str, Any]:
@@ -64,22 +77,22 @@ class ModelConfig(dg.Config):
     use_batch_norm: bool = True
 
     # Training parameters
-    batch_size: int = 64  # Smaller batch size for better generalization
-    learning_rate: float = 0.001  # Reduced learning rate
-    epochs: int = 30  # Increased epochs
+    batch_size: int = DEFAULT_BATCH_SIZE  # Smaller batch size for better generalization
+    learning_rate: float = DEFAULT_LEARNING_RATE  # Reduced learning rate
+    epochs: int = DEFAULT_EPOCHS  # Increased epochs
     optimizer_type: str = "adam"  # Changed to Adam
     momentum: float = 0.9
     weight_decay: float = 1e-5  # Reduced weight decay
 
     # Learning rate scheduling
     use_lr_scheduler: bool = True
-    lr_step_size: int = 10
-    lr_gamma: float = 0.1
+    lr_step_size: int = LR_STEP_SIZE
+    lr_gamma: float = LR_GAMMA
 
     # Early stopping
     use_early_stopping: bool = True
-    patience: int = 7
-    min_delta: float = 0.001
+    patience: int = EARLY_STOPPING_PATIENCE
+    min_delta: float = MIN_DELTA
 
     # Data augmentation - Research proven techniques
     use_data_augmentation: bool = True
@@ -90,7 +103,7 @@ class ModelConfig(dg.Config):
 
     # Model saving
     save_model: bool = True
-    model_save_dir: str = "models"
+    model_save_dir: str = str(MODELS_DIR)
     model_name_prefix: str = "mnist_cnn"
 
 
@@ -190,33 +203,9 @@ def train_model(context, model, train_loader, val_loader, config: ModelConfig):
     context.log.info(f"Training on device: {device}")
     model.to(device)
 
-    # Configure optimizer based on config with improved parameters
-    if config.optimizer_type.lower() == "adam":
-        optimizer = optim.Adam(
-            model.parameters(),
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay,
-        )
-        context.log.info(
-            f"Using Adam optimizer with lr={config.learning_rate}, weight_decay={config.weight_decay}"
-        )
-    elif config.optimizer_type.lower() == "sgd":
-        optimizer = optim.SGD(
-            model.parameters(),
-            lr=config.learning_rate,
-            momentum=config.momentum,
-            weight_decay=config.weight_decay,
-        )
-        context.log.info(
-            f"Using SGD optimizer with lr={config.learning_rate}, momentum={config.momentum}"
-        )
-    else:
-        optimizer = optim.Adam(
-            model.parameters(),
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay,
-        )
-        context.log.info(f"Defaulting to Adam optimizer with lr={config.learning_rate}")
+    # Get optimizer using utility function
+    optimizer = get_optimizer(config, model.parameters())
+    context.log.info(f"Using {config.optimizer_type} optimizer with lr={config.learning_rate}")
 
     criterion = nn.CrossEntropyLoss()
 
@@ -224,11 +213,11 @@ def train_model(context, model, train_loader, val_loader, config: ModelConfig):
     scheduler = None
     if config.use_lr_scheduler:
         scheduler = optim.lr_scheduler.StepLR(
-            optimizer, step_size=config.lr_step_size, gamma=config.lr_gamma
+            optimizer,
+            step_size=LR_STEP_SIZE,
+            gamma=LR_GAMMA
         )
-        context.log.info(
-            f"Using StepLR scheduler with step_size={config.lr_step_size}, gamma={config.lr_gamma}"
-        )
+        context.log.info(f"Using StepLR scheduler with step_size={LR_STEP_SIZE}, gamma={LR_GAMMA}")
 
     train_losses = []
     val_accuracies = []
@@ -241,7 +230,7 @@ def train_model(context, model, train_loader, val_loader, config: ModelConfig):
     context.log.info(f"Starting training with:")
     context.log.info(f"- Batch size: {config.batch_size}")
     context.log.info(f"- Max epochs: {config.epochs}")
-    context.log.info(f"- Early stopping patience: {config.patience}")
+    context.log.info(f"- Early stopping patience: {EARLY_STOPPING_PATIENCE}")
     context.log.info(f"- Model architecture:\n{str(model)}")
 
     for epoch in range(config.epochs):
@@ -351,7 +340,6 @@ def train_model(context, model, train_loader, val_loader, config: ModelConfig):
 
 @dg.asset(
     description="Train CNN digit classifier with configurable parameters",
-    compute_kind="model_training",
     group_name="model_pipeline",
     required_resource_keys={"model_storage"},
 )
@@ -435,15 +423,15 @@ def digit_classifier(
 class ModelEvaluationConfig(dg.Config):
     """Configuration for model evaluation."""
 
-    batch_size: int = 64
-    accuracy_threshold: float = 0.90
+    batch_size: int = DEFAULT_BATCH_SIZE
+    accuracy_threshold: float = ACCURACY_THRESHOLD
 
 
 @dg.asset(
     description="Evaluate model performance on test set",
-    compute_kind="model_evaluation",
     group_name="model_pipeline",
     required_resource_keys={"model_storage"},
+    deps=["digit_classifier"],
 )
 def model_evaluation(
     context,
@@ -557,12 +545,12 @@ def model_evaluation(
 class DeploymentConfig(dg.Config):
     """Configuration for model deployment."""
 
-    accuracy_threshold: float = 0.90
+    accuracy_threshold: float = ACCURACY_THRESHOLD
+    model_path: str = str(MODELS_DIR)
 
 
 @dg.asset(
     description="Deploy model to production if it meets quality threshold",
-    compute_kind="model_deployment",
     group_name="model_pipeline",
     required_resource_keys={"model_storage"},
 )

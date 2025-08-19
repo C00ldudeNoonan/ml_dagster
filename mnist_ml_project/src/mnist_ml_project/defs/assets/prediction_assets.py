@@ -33,7 +33,6 @@ class RealTimePredictionConfig(dg.Config):
 
 @dg.asset(
     description="Generate predictions on uploaded digit images",
-    compute_kind="batch_inference",
     group_name="inference",
     required_resource_keys={"model_storage"},
     deps=["production_digit_classifier"],
@@ -123,7 +122,6 @@ def batch_digit_predictions(
 
 @dg.asset(
     description="Real-time digit prediction endpoint",
-    compute_kind="real_time_inference",
     group_name="inference",
     required_resource_keys={"model_storage"},
     deps=["production_digit_classifier"],

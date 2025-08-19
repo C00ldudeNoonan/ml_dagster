@@ -3,11 +3,17 @@ import torch
 from typing import Dict, Any
 import dagster as dg
 from sklearn.model_selection import train_test_split
+from mnist_ml_project.defs.constants import (
+    DATA_DIR,
+    MNIST_MEAN,
+    MNIST_STD,
+    VALIDATION_SPLIT,
+    RANDOM_SEED
+)
 
 
 @dg.asset(
     description="Download and load raw MNIST dataset",
-    compute_kind="data_ingestion",
     group_name="data_processing",
 )
 def raw_mnist_data(context) -> Dict[str, Any]:
@@ -16,18 +22,18 @@ def raw_mnist_data(context) -> Dict[str, Any]:
     transform = transforms.Compose(
         [
             transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,)),  # MNIST mean and std
+            transforms.Normalize((MNIST_MEAN,), (MNIST_STD,)),  # MNIST mean and std
         ]
     )
 
     # Download training data
     train_dataset = datasets.MNIST(
-        root="./data", train=True, download=True, transform=transform
+        root=str(DATA_DIR), train=True, download=True, transform=transform
     )
 
     # Download test data
     test_dataset = datasets.MNIST(
-        root="./data", train=False, download=True, transform=transform
+        root=str(DATA_DIR), train=False, download=True, transform=transform
     )
 
     # Convert to tensors
@@ -53,7 +59,6 @@ def raw_mnist_data(context) -> Dict[str, Any]:
 
 @dg.asset(
     description="Preprocess MNIST images for training",
-    compute_kind="data_preprocessing",
     group_name="data_processing",
 )
 def processed_mnist_data(
@@ -68,7 +73,10 @@ def processed_mnist_data(
 
     # Create validation split from training data
     train_data, val_data, train_labels, val_labels = train_test_split(
-        train_data, train_labels, test_size=0.2, random_state=42, stratify=train_labels
+        train_data, train_labels, 
+        test_size=VALIDATION_SPLIT, 
+        random_state=RANDOM_SEED, 
+        stratify=train_labels
     )
 
     # Convert back to tensors
