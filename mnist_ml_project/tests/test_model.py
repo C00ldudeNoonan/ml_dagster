@@ -2,10 +2,12 @@ import pytest
 import torch
 from mnist_ml_project.defs.assets.model_assets import DigitCNN
 
+
 def test_model_creation():
     """Test that we can create a model."""
     model = DigitCNN()
     assert model is not None
+
 
 def test_model_forward_pass():
     """Test that model can process input."""

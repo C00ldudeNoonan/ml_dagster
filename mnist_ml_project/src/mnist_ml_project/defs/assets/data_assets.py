@@ -8,7 +8,7 @@ from mnist_ml_project.defs.constants import (
     MNIST_MEAN,
     MNIST_STD,
     VALIDATION_SPLIT,
-    RANDOM_SEED
+    RANDOM_SEED,
 )
 
 
@@ -73,10 +73,11 @@ def processed_mnist_data(
 
     # Create validation split from training data
     train_data, val_data, train_labels, val_labels = train_test_split(
-        train_data, train_labels, 
-        test_size=VALIDATION_SPLIT, 
-        random_state=RANDOM_SEED, 
-        stratify=train_labels
+        train_data,
+        train_labels,
+        test_size=VALIDATION_SPLIT,
+        random_state=RANDOM_SEED,
+        stratify=train_labels,
     )
 
     # Convert back to tensors

@@ -48,11 +48,14 @@ class LocalModelStoreResource(ModelStoreResource):
         """List available models, sorted by modification time (newest first)."""
         if not os.path.exists(self.models_path):
             return []
-        
-        model_files = [f for f in os.listdir(self.models_path) if f.endswith('.pkl')]
+
+        model_files = [f for f in os.listdir(self.models_path) if f.endswith(".pkl")]
         # Sort by modification time, newest first
-        model_files.sort(key=lambda x: os.path.getmtime(os.path.join(self.models_path, x)), reverse=True)
-        
+        model_files.sort(
+            key=lambda x: os.path.getmtime(os.path.join(self.models_path, x)),
+            reverse=True,
+        )
+
         # Return just the model names without extension
         return [os.path.splitext(f)[0] for f in model_files]
 
@@ -94,32 +97,33 @@ class S3ModelStoreResource(ModelStoreResource):
     def list_models(self) -> List[str]:
         """List available models from S3, sorted by modification time (newest first)."""
         s3_client = boto3.client("s3")
-        
+
         try:
             # List objects with the models prefix
             response = s3_client.list_objects_v2(
-                Bucket=self.bucket_name,
-                Prefix=self.models_prefix
+                Bucket=self.bucket_name, Prefix=self.models_prefix
             )
-            
-            if 'Contents' not in response:
+
+            if "Contents" not in response:
                 return []
-            
+
             # Get model files and their last modified times
             model_objects = []
-            for obj in response['Contents']:
-                if obj['Key'].endswith('.pth'):
-                    model_objects.append({
-                        'key': obj['Key'],
-                        'last_modified': obj['LastModified']
-                    })
-            
+            for obj in response["Contents"]:
+                if obj["Key"].endswith(".pth"):
+                    model_objects.append(
+                        {"key": obj["Key"], "last_modified": obj["LastModified"]}
+                    )
+
             # Sort by modification time, newest first
-            model_objects.sort(key=lambda x: x['last_modified'], reverse=True)
-            
+            model_objects.sort(key=lambda x: x["last_modified"], reverse=True)
+
             # Return just the model names without extension and prefix
-            return [os.path.splitext(os.path.basename(obj['key']))[0] for obj in model_objects]
-            
+            return [
+                os.path.splitext(os.path.basename(obj["key"]))[0]
+                for obj in model_objects
+            ]
+
         except Exception as e:
             # Log error and return empty list
             print(f"Error listing S3 models: {e}")

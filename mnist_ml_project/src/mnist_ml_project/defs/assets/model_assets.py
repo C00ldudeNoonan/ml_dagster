@@ -21,7 +21,7 @@ from mnist_ml_project.defs.constants import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_LEARNING_RATE,
     DEFAULT_EPOCHS,
-    ACCURACY_THRESHOLD
+    ACCURACY_THRESHOLD,
 )
 from mnist_ml_project.defs.types import ModelData, EvaluationResult
 from mnist_ml_project.defs.utils import get_optimizer, create_conv_block
@@ -148,10 +148,10 @@ class DigitCNN(nn.Module):
     def forward(self, x):
         """
         Forward pass through the CNN architecture.
-        
+
         Input: (batch_size, 1, 28, 28) - MNIST digit images
         Output: (batch_size, 10) - Raw logits for 10 digit classes
-        
+
         Architecture flow:
         1. Conv1: 28x28 -> 14x14 (5x5 kernel, 32 channels)
         2. Conv2: 14x14 -> 7x7 (5x5 kernel, 64 channels) + spatial dropout
@@ -163,15 +163,15 @@ class DigitCNN(nn.Module):
         x = self._conv_block(x, self.conv1, self.bn1, self.pool1)
         x = self._conv_block(x, self.conv2, self.bn2, self.pool2, self.dropout1)
         x = self._conv_block(x, self.conv3, self.bn3, self.pool3)
-        
+
         # Flatten spatial dimensions for fully connected layers
         x = torch.flatten(x, 1)  # Keep batch dimension
-        
+
         # Fully connected layers with progressive feature reduction
         x = self._fc_block(x, self.fc1, self.dropout2)
         x = self._fc_block(x, self.fc2)
         x = self.fc3(x)  # Final layer - no activation (raw logits)
-        
+
         return x  # Return raw logits for CrossEntropyLoss
 
 
@@ -184,7 +184,9 @@ def train_model(context, model, train_loader, val_loader, config: ModelConfig):
 
     # Get optimizer using utility function
     optimizer = get_optimizer(config, model.parameters())
-    context.log.info(f"Using {config.optimizer_type} optimizer with lr={config.learning_rate}")
+    context.log.info(
+        f"Using {config.optimizer_type} optimizer with lr={config.learning_rate}"
+    )
 
     criterion = nn.CrossEntropyLoss()
 
@@ -192,11 +194,11 @@ def train_model(context, model, train_loader, val_loader, config: ModelConfig):
     scheduler = None
     if config.use_lr_scheduler:
         scheduler = optim.lr_scheduler.StepLR(
-            optimizer,
-            step_size=LR_STEP_SIZE,
-            gamma=LR_GAMMA
+            optimizer, step_size=LR_STEP_SIZE, gamma=LR_GAMMA
         )
-        context.log.info(f"Using StepLR scheduler with step_size={LR_STEP_SIZE}, gamma={LR_GAMMA}")
+        context.log.info(
+            f"Using StepLR scheduler with step_size={LR_STEP_SIZE}, gamma={LR_GAMMA}"
+        )
 
     train_losses = []
     val_accuracies = []
@@ -438,9 +440,9 @@ def model_evaluation(
         context.log.info(f"Loading model for evaluation: {latest_model_name}")
 
         model_data = model_store.load_model(latest_model_name)
-        
-        if isinstance(model_data, dict) and 'model' in model_data:
-            model_to_evaluate = model_data['model']
+
+        if isinstance(model_data, dict) and "model" in model_data:
+            model_to_evaluate = model_data["model"]
         else:
             model_to_evaluate = model_data  # Direct model object
 
@@ -529,7 +531,9 @@ class DeploymentConfig(dg.Config):
 
     accuracy_threshold: float = ACCURACY_THRESHOLD
     model_path: str = str(MODELS_DIR)
-    custom_model_name: Optional[str] = None  # Allow users to specify a specific model to deploy
+    custom_model_name: Optional[str] = (
+        None  # Allow users to specify a specific model to deploy
+    )
     force_deploy: bool = False  # Allow users to bypass accuracy threshold
 
 
@@ -548,26 +552,30 @@ def production_digit_classifier(
 
     # Get the model store resource
     model_store = context.resources.model_storage
-    
+
     # Check if user wants to deploy a specific custom model
     if config.custom_model_name:
-        context.log.info(f"User requested deployment of custom model: {config.custom_model_name}")
-        
+        context.log.info(
+            f"User requested deployment of custom model: {config.custom_model_name}"
+        )
+
         try:
             # Load the custom model
             custom_model_data = model_store.load_model(config.custom_model_name)
-            
+
             # Handle both formats: dict with 'model' key or direct model object
-            if isinstance(custom_model_data, dict) and 'model' in custom_model_data:
-                custom_model = custom_model_data['model']
+            if isinstance(custom_model_data, dict) and "model" in custom_model_data:
+                custom_model = custom_model_data["model"]
             else:
                 custom_model = custom_model_data  # Direct model object
-            
+
             # Save the custom model as production model
             production_model_name = f"production_custom_{config.custom_model_name}"
-            context.log.info(f"Saving custom model as production model: {production_model_name}")
+            context.log.info(
+                f"Saving custom model as production model: {production_model_name}"
+            )
             model_store.save_model(custom_model, production_model_name)
-            
+
             context.add_output_metadata(
                 {
                     "deployment_status": "deployed_custom",
@@ -577,11 +585,13 @@ def production_digit_classifier(
                 },
                 output_name="result",
             )
-            
+
             return custom_model
-            
+
         except Exception as e:
-            context.log.error(f"Failed to load custom model {config.custom_model_name}: {str(e)}")
+            context.log.error(
+                f"Failed to load custom model {config.custom_model_name}: {str(e)}"
+            )
             context.add_output_metadata(
                 {
                     "deployment_status": "failed_custom",
@@ -592,20 +602,22 @@ def production_digit_classifier(
                 output_name="result",
             )
             return None
-    
+
     # Standard deployment logic based on accuracy threshold
     test_accuracy = model_evaluation["test_accuracy"]
-    
+
     # Check if user wants to force deployment regardless of accuracy
     if config.force_deploy:
-        context.log.info(f"Force deployment enabled - deploying model with accuracy: {test_accuracy:.4f}")
+        context.log.info(
+            f"Force deployment enabled - deploying model with accuracy: {test_accuracy:.4f}"
+        )
         accuracy_str = f"{test_accuracy:.2f}".replace(".", "p")
         model_name = f"production_model_forced_{accuracy_str}"
-        
+
         # Save the model using the model store
         context.log.info(f"Saving forced production model as {model_name}")
         model_store.save_model(digit_classifier, model_name)
-        
+
         context.add_output_metadata(
             {
                 "deployment_status": "deployed_forced",
@@ -616,9 +628,9 @@ def production_digit_classifier(
             },
             output_name="result",
         )
-        
+
         return digit_classifier
-    
+
     # Standard accuracy-based deployment
     context.log.info(
         f"Candidate model accuracy: {test_accuracy:.4f}, Threshold: {config.accuracy_threshold}"

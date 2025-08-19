@@ -55,10 +55,10 @@ def batch_digit_predictions(
 
         # Load the model using the resource
         model_data = model_store.load_model(latest_model_name)
-        
+
         # Handle both formats: dict with 'model' key or direct model object
-        if isinstance(model_data, dict) and 'model' in model_data:
-            production_model = model_data['model']
+        if isinstance(model_data, dict) and "model" in model_data:
+            production_model = model_data["model"]
         else:
             production_model = model_data  # Direct model object
 
@@ -142,7 +142,11 @@ def digit_predictions(
         saved_models = model_store.list_models()
         if not saved_models:
             context.log.error("No saved models found")
-            return {"prediction": None, "confidence": 0.0, "error": "No models available"}
+            return {
+                "prediction": None,
+                "confidence": 0.0,
+                "error": "No models available",
+            }
 
         # Get the latest model name (first one is newest due to sorting)
         latest_model_name = saved_models[0]  # Already just the model name
@@ -150,10 +154,10 @@ def digit_predictions(
 
         # Load the model using the resource
         model_data = model_store.load_model(latest_model_name)
-        
+
         # Handle both formats: dict with 'model' key or direct model object
-        if isinstance(model_data, dict) and 'model' in model_data:
-            production_model = model_data['model']
+        if isinstance(model_data, dict) and "model" in model_data:
+            production_model = model_data["model"]
         else:
             production_model = model_data  # Direct model object
 
