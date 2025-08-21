@@ -36,4 +36,9 @@ registry_modules = [
     "mnist_ml_project.components.*",
 ]
 
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.4.1",
+]
+
 
